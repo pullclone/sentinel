@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::collections::HashSet;
 use tracing::debug;
 
 use crate::{
@@ -68,6 +69,7 @@ impl Backend for FirewalldBackend {
     async fn validate(&self, policy: &Policy, snap: &BackendStatus) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         let checks = policy.checks.as_ref();
+        let parsed = parse_zone_listing(&snap.raw);
 
         if checks
             .and_then(|c| c.require_firewall_active)
@@ -84,8 +86,7 @@ impl Backend for FirewalldBackend {
 
         if let Some(req_services) = checks.and_then(|c| c.required_services.as_ref()) {
             for s in req_services {
-                let needle = format!(" {}", s);
-                if !snap.raw.contains(&needle) && !snap.raw.contains(&format!("services: {}", s)) {
+                if !parsed.services.contains(s) {
                     findings.push(Finding {
                         id: format!("missing-service:{s}"),
                         severity: Overall::Warn,
@@ -97,7 +98,7 @@ impl Backend for FirewalldBackend {
 
         if let Some(req_ports) = checks.and_then(|c| c.required_ports.as_ref()) {
             for p in req_ports {
-                if !snap.raw.contains(p) {
+                if !parsed.ports.contains(p) {
                     findings.push(Finding {
                         id: format!("missing-port:{p}"),
                         severity: Overall::Warn,
@@ -109,4 +110,33 @@ impl Backend for FirewalldBackend {
 
         Ok(findings)
     }
+}
+
+#[derive(Default)]
+struct ZoneListing {
+    services: HashSet<String>,
+    ports: HashSet<String>,
+}
+
+fn parse_zone_listing(raw: &str) -> ZoneListing {
+    let mut result = ZoneListing::default();
+
+    for line in raw.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("services:") {
+            for svc in rest.split_whitespace() {
+                if !svc.is_empty() {
+                    result.services.insert(svc.to_string());
+                }
+            }
+        } else if let Some(rest) = line.strip_prefix("ports:") {
+            for port in rest.split_whitespace() {
+                if !port.is_empty() {
+                    result.ports.insert(port.to_string());
+                }
+            }
+        }
+    }
+
+    result
 }
