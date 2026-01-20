@@ -18,5 +18,11 @@ cargo test
 cargo run -- status --one-line
 ```
 
+## Nix flake
+- `nix develop` — enters a shell with cargo/rustc/rustfmt/clippy.
+- `nix build` — builds the `sentinelctl` binary.
+
+On first `nix build`, Nix will print the expected `cargoHash`; replace the placeholder in `flake.nix` with that value and re-run.
+
 ## Policy example
 See `sentinel.policy.toml.example` for a minimal schema-1 policy.
