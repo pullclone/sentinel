@@ -9,6 +9,8 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
     in
     {
+      nixosModules.sentinel = import ./nix/module.nix;
+
       packages = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };

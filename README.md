@@ -21,6 +21,7 @@ cargo run -- status --one-line
 ## Nix flake
 - `nix develop` — enters a shell with cargo/rustc/rustfmt/clippy.
 - `nix build` — builds the `sentinelctl` binary.
+- `nixosModules.sentinel` — NixOS module for periodic checks writing `/run/sentinel/status.json`.
 
 On first `nix build`, Nix will print the expected `cargoHash`; replace the placeholder in `flake.nix` with that value and re-run.
 
