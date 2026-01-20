@@ -1,0 +1,25 @@
+# Logrotate Configuration
+# Save the following as:
+# /etc/logrotate.d/sentinel
+# Test with sudo logrotate -f /etc/logrotate.d/sentinel
+
+conf
+/home/valera/dev/sentinel-logs/sentinel.log {
+    daily
+    size 500k
+    rotate 14
+    compress
+    dateext
+    missingok
+    notifempty
+    copytruncate
+
+    prerotate
+        /usr/bin/chattr -a /home/valera/dev/sentinel-logs/sentinel.log || true
+    endscript
+
+    postrotate
+        /usr/bin/chattr +a /home/valera/dev/sentinel-logs/sentinel.log || true
+        find /home/valera/dev/sentinel-logs/ -name "sentinel.log-*.gz" -exec sha256sum {} \; >> /home/valera/dev/sentinel-logs/sentinel.log.integrity
+    endscript
+}

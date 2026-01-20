@@ -1,0 +1,12 @@
+🧠 Strategy
+
+    ✅ Start with an independent tray app — named Sentinel Watch or sentinel-tray
+
+    🔄 Use sentinelctl to read/edit live environment state, fetch current logs, SHA256, etc.
+
+    🌄 Theming: Alpenglow icon set using SVG for each state
+
+~/.local/bin/sentinel-tray
+~/.local/share/sentinel-tray/icons/
+~/.config/autostart/sentinel-tray.desktop
+~/dev/sentinel-logs/

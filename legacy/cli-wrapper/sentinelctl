@@ -1,0 +1,104 @@
+# sentinelctl - CLI helper for Sentinel tray and backend interaction
+
+#!/bin/bash
+
+# Config
+SENTINEL_LOG_DIR="$HOME/dev/sentinel-logs"
+LOG_FILE="$SENTINEL_LOG_DIR/sentinel.log"
+CONFIG_FILE="$HOME/.config/sentinel/env.conf"
+BACKUP_CHECKSUM_FILE="$SENTINEL_LOG_DIR/sentinel.rules.sha256"
+CURRENT_RULES_FILE="$SENTINEL_LOG_DIR/sentinel.current.rules"
+
+print_usage() {
+  echo "Sentinel Control Utility"
+  echo "Usage: $0 <command>"
+  echo "Commands:"
+  echo "  status         - Show current sentinel status"
+  echo "  log            - Tail log file"
+  echo "  set-level <L>  - Set FIREWALL_LOG_LEVEL (DEBUG/INFO/WARN/ERROR)"
+  echo "  toggle-popup   - Toggle popup notifications on/off"
+  echo "  diff-rules     - Compare current and backup ruleset"
+  echo "  pause-security - Pause SECURITY_LOGGING (confirmation required)"
+  echo "  help           - Show this help message"
+}
+
+load_env() {
+  [[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+}
+
+save_env() {
+  mkdir -p "$(dirname "$CONFIG_FILE")"
+  echo "FIREWALL_LOG_LEVEL=\"$FIREWALL_LOG_LEVEL\"" > "$CONFIG_FILE"
+  echo "FIREWALL_POPUPS=\"$FIREWALL_POPUPS\"" >> "$CONFIG_FILE"
+  echo "SECURITY_LOGGING=\"$SECURITY_LOGGING\"" >> "$CONFIG_FILE"
+}
+
+cmd_status() {
+  load_env
+  echo "FIREWALL_LOG_LEVEL: $FIREWALL_LOG_LEVEL"
+  echo "FIREWALL_POPUPS:    $FIREWALL_POPUPS"
+  echo "SECURITY_LOGGING:   $SECURITY_LOGGING"
+}
+
+cmd_log() {
+  tail -n 100 -f "$LOG_FILE"
+}
+
+cmd_set_level() {
+  local level="$1"
+  case "$level" in
+    DEBUG|INFO|WARN|ERROR)
+      FIREWALL_LOG_LEVEL="$level"
+      save_env
+      echo "Set log level to $level"
+      ;;
+    *)
+      echo "Invalid log level: $level"
+      ;;
+  esac
+}
+
+cmd_toggle_popup() {
+  load_env
+  if [[ "$FIREWALL_POPUPS" == "true" ]]; then
+    FIREWALL_POPUPS="false"
+  else
+    FIREWALL_POPUPS="true"
+  fi
+  save_env
+  echo "Popups now: $FIREWALL_POPUPS"
+}
+
+cmd_diff_rules() {
+  firewall-cmd --direct --get-all-rules > "$CURRENT_RULES_FILE"
+  echo "Comparing current ruleset with backup..."
+  diff -u <(sort "$CURRENT_RULES_FILE") <(cut -d' ' -f3- "$BACKUP_CHECKSUM_FILE" | sort)
+}
+
+cmd_pause_security() {
+  echo -n "Type 'STAND DOWN' to pause SECURITY_LOGGING temporarily: "
+  read -r confirm
+  if [[ "$confirm" == "STAND DOWN" ]]; then
+    duration=$(( (RANDOM % (6 * 3600)) + (4 * 3600) ))
+    echo "SECURITY_LOGGING temporarily disabled for $((duration/3600)) hours"
+    SECURITY_LOGGING="false"
+    save_env
+    ( sleep "$duration" && SECURITY_LOGGING="true" && save_env ) &
+  else
+    echo "Incorrect confirmation. SECURITY_LOGGING remains active."
+  fi
+}
+
+case "$1" in
+  status) cmd_status;;
+  log) cmd_log;;
+  set-level) shift; cmd_set_level "$1";;
+  toggle-popup) cmd_toggle_popup;;
+  diff-rules) cmd_diff_rules;;
+  pause-security) cmd_pause_security;;
+  help|--help|-h) print_usage;;
+  *)
+    echo "Unknown command: $1"
+    print_usage
+    ;;
+esac

@@ -1,0 +1,13 @@
+schema = 1
+backend = "auto" # auto|firewalld|nftables
+
+[checks]
+# MVP-level checks (backend-specific interpretation)
+require_firewall_active = true
+
+# firewalld-oriented
+required_services = ["ssh"]
+required_ports = ["22/tcp"]
+
+# nftables-oriented (MVP: string match in ruleset; later: real parser)
+required_fragments = ["tcp dport 22 accept"]

@@ -1,0 +1,90 @@
+Step 1: Required Once to Set Up Rules
+💥 ICMP Echo-Request (Ping) Rate Limiting
+
+sudo firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 -p icmp --icmp-type echo-request -m limit --limit 5/second --limit-burst 10 -j ACCEPT
+sudo firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -p icmp --icmp-type echo-request -j DROP
+
+    The first rule: Accept up to 5 pings per second (with short bursts allowed).
+
+    The second rule: Drop excess ping requests — prevents abuse (DDoS, scanning).
+
+    These go into the direct rule layer, which means they won’t be overridden by standard firewalld zone configs.
+
+🚫 SSH Brute Force Protection (Only if SSH is installed and enabled)
+
+sudo firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 -p tcp --dport 22 -m recent --name ssh-brute --set
+sudo firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -p tcp --dport 22 -m recent --name ssh-brute --update --seconds 60 --hitcount 10 -j DROP
+sudo firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 2 -p tcp --dport 22 -j ACCEPT
+
+    These use the recent module to track repeat SSH attempts and block them if excessive.
+
+You do not need to add these SSH rules if:
+
+    sshd is not installed
+
+    You’re not using remote access via SSH
+
+🔁 Apply the Rules
+
+sudo firewall-cmd --reload
+
+This reloads the firewall so the new rules take effect.
+✅ Once Added, You're Good
+
+Your dispatcher script will now log and audit the presence of these rules and their checksums. You don’t need to repeat these --add-rule commands unless you:
+
+    Reset your firewalld configuration
+
+    Manually remove rules
+
+    Reinstall the system
+
+Step 2: Create a NetworkManager dispatcher script
+
+NetworkManager dispatcher scripts run on interface events like up or down.
+
+Create the script:
+
+sudo tee /etc/NetworkManager/dispatcher.d/99-firewalld-reload > /dev/null << 'EOF'
+#!/bin/bash
+
+IFACE="$1"
+STATUS="$2"
+
+if [ "$STATUS" = "up" ]; then
+    # Reload firewalld to ensure rules are applied
+    /usr/bin/firewall-cmd --reload
+fi
+EOF
+
+Make it executable:
+
+sudo chmod +x /etc/NetworkManager/dispatcher.d/99-firewalld-reload
+
+Step 3: Test
+
+    Bring your network interface down and up:
+
+sudo nmcli device disconnect <interface_name>
+sudo nmcli device connect <interface_name>
+
+    Check your firewall rules are applied:
+
+sudo firewall-cmd --direct --get-all-rules
+
+    Confirm rate limiting works (try ping flood or SSH attempts)
+
+Why reload on interface up?
+
+Sometimes firewalld can reload zones/rules on interface state change, but custom direct rules or scripts may require explicit reload to guarantee your rules are active, especially after DHCP renew or interface cycling.
+Summary
+
+    Add raw iptables rules via firewalld direct interface for rate limiting.
+
+    Use NetworkManager dispatcher script to reload firewalld on interface up.
+
+    Keep your NetworkManager GUI settings intact and compatible.
+
+    Reloading firewalld on interface events ensures consistent enforcement.
+
+If you want, I can help you adapt the script to selectively reload only when certain interfaces come up, or add logging/debugging to the dispatcher script. Just let me know!

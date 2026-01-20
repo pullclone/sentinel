@@ -1,0 +1,18 @@
+[Unit]
+Description=Sentinel: Firewall Integrity Check at Boot
+After=network-online.target firewalld.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sentinel-selfcheck
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=SentinelBoot
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
