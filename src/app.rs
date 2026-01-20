@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use chrono::Utc;
 
 use crate::{
@@ -9,39 +9,7 @@ use crate::{
 };
 
 pub async fn run(cli: Cli) -> Result<ExitStatus> {
-    let policy_path = cli.policy.clone().unwrap_or(default_policy_path()?);
-    let policy =
-        load_policy(&policy_path).with_context(|| format!("policy: {}", policy_path.display()))?;
-
-    let backend = select_backend(cli.backend, policy.backend.as_deref()).await?;
-
     match cli.cmd {
-        Command::Status { json, one_line } => {
-            let report = build_report(backend.as_ref(), &policy).await?;
-            if one_line {
-                println!("sentinel:{}:{}", report.backend, report.overall.as_str());
-            } else if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                print_human_readable(&report);
-            }
-            Ok(report.overall.into())
-        }
-        Command::Check { json } => {
-            let report = build_report(backend.as_ref(), &policy).await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                println!("{}", report.overall.as_str());
-            }
-            Ok(report.overall.into())
-        }
-        Command::Diff => {
-            // MVP: show raw snapshot; policy-based baseline/diff will come later.
-            let snap = backend.snapshot().await?;
-            println!("{}", snap.raw.trim());
-            Ok(ExitStatus::Ok)
-        }
         Command::Backend { cmd } => {
             match cmd {
                 BackendCmd::List => {
@@ -58,6 +26,64 @@ pub async fn run(cli: Cli) -> Result<ExitStatus> {
             }
             Ok(ExitStatus::Ok)
         }
+        _ => handle_status_like(cli).await,
+    }
+}
+
+async fn handle_status_like(cli: Cli) -> Result<ExitStatus> {
+    let policy_path = cli.policy.clone().unwrap_or(default_policy_path()?);
+    let policy_res = load_policy(&policy_path);
+
+    let backend_hint = backend_label(
+        cli.backend,
+        policy_res.as_ref().ok().and_then(|p| p.backend.as_deref()),
+    );
+
+    let policy = match policy_res {
+        Ok(p) => p,
+        Err(_) => {
+            let report = error_report(
+                &backend_hint,
+                "policy-load-failed",
+                "policy file missing or invalid (schema=1 required)",
+            );
+            return emit_report(cli.cmd, report);
+        }
+    };
+
+    let backend = match select_backend(cli.backend, policy.backend.as_deref()).await {
+        Ok(b) => b,
+        Err(_) => {
+            let report = error_report(
+                &backend_label(cli.backend, policy.backend.as_deref()),
+                "backend-detect-failed",
+                "no supported firewall backend detected (firewalld or nftables)",
+            );
+            return emit_report(cli.cmd, report);
+        }
+    };
+
+    match cli.cmd {
+        Command::Status { json, one_line } => {
+            let report = build_report(backend.as_ref(), &policy).await?;
+            output_report(&report, json, one_line);
+            Ok(report.overall.into())
+        }
+        Command::Check { json } => {
+            let report = build_report(backend.as_ref(), &policy).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", report.overall.as_str());
+            }
+            Ok(report.overall.into())
+        }
+        Command::Diff => {
+            let snap = backend.snapshot().await?;
+            println!("{}", snap.raw.trim());
+            Ok(ExitStatus::Ok)
+        }
+        Command::Backend { .. } => unreachable!("handled earlier"),
     }
 }
 
@@ -138,6 +164,53 @@ async fn build_report(backend: &dyn Backend, policy: &Policy) -> Result<StatusRe
     })
 }
 
+fn emit_report(cmd: Command, report: StatusReport) -> Result<ExitStatus> {
+    match cmd {
+        Command::Status { json, one_line } => {
+            output_report(&report, json, one_line);
+            Ok(report.overall.into())
+        }
+        Command::Check { json } => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", report.overall.as_str());
+            }
+            Ok(report.overall.into())
+        }
+        Command::Diff => {
+            eprintln!(
+                "{}",
+                report
+                    .findings
+                    .first()
+                    .map(|f| f.msg.as_str())
+                    .unwrap_or("diff unavailable")
+            );
+            Ok(report.overall.into())
+        }
+        Command::Backend { .. } => unreachable!("handled earlier"),
+    }
+}
+
+fn output_report(report: &StatusReport, json: bool, one_line: bool) {
+    if one_line {
+        println!("sentinel:{}:{}", report.backend, report.overall.as_str());
+    } else if json {
+        println!("{}", serde_json::to_string_pretty(report).unwrap());
+    } else {
+        print_human_readable(report);
+    }
+}
+
+fn backend_label(choice: BackendChoice, policy_backend: Option<&str>) -> String {
+    match choice {
+        BackendChoice::Firewalld => "firewalld".into(),
+        BackendChoice::Nftables => "nftables".into(),
+        BackendChoice::Auto => policy_backend.unwrap_or("auto").to_string(),
+    }
+}
+
 fn print_human_readable(report: &StatusReport) {
     println!("backend: {}", report.backend);
     println!("overall: {}", report.overall.as_str());
@@ -148,5 +221,25 @@ fn print_human_readable(report: &StatusReport) {
     );
     for f in &report.findings {
         println!("- [{}] {}: {}", f.severity.as_str(), f.id, f.msg);
+    }
+}
+
+fn error_report(backend: &str, id: &str, msg: &str) -> StatusReport {
+    StatusReport {
+        schema: 1,
+        overall: Overall::Error,
+        backend: backend.to_string(),
+        active_profile: "default".into(),
+        last_check: Utc::now(),
+        summary: Summary {
+            checks_total: 1,
+            checks_warn: 0,
+            checks_failed: 1,
+        },
+        findings: vec![crate::status::Finding {
+            id: id.into(),
+            severity: Overall::Error,
+            msg: msg.into(),
+        }],
     }
 }
