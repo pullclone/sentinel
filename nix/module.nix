@@ -21,6 +21,70 @@ let
     mv -f "$tmp" "${cfg.statusPath}"
     trap - EXIT
   '';
+
+  waybarDir = cfg.waybar.assetsDir;
+
+  waybarScript = pkgs.writeShellScript "sentinel-waybar.sh" ''
+    set -euo pipefail
+
+    STATUS_FILE="''${1:-${cfg.statusPath}}"
+    JQ="${pkgs.jq}/bin/jq"
+
+    if [[ ! -r "$STATUS_FILE" ]]; then
+      "$JQ" -n --arg text "🛡 sentinel:unknown" --arg class "error" --arg tooltip "No status file: $STATUS_FILE" \
+        '{text:$text,class:$class,tooltip:$tooltip}'
+      exit 0
+    fi
+
+    overall="$("$JQ" -r '.overall // "error"' "$STATUS_FILE")"
+    backend="$("$JQ" -r '.backend // "unknown"' "$STATUS_FILE")"
+
+    text="🛡 ''${backend}:''${overall}"
+
+    tooltip="$("$JQ" -r '
+      "Sentinel (" + (.backend // "unknown") + "): " + (.overall // "unknown") + "\n" +
+      "warn=" + ((.summary.checks_warn // 0)|tostring) + " failed=" + ((.summary.checks_failed // 0)|tostring) + "\n\n" +
+      ((.findings // []) | map(.severity + ": " + .id + " — " + .msg) | .[0:10] | join("\n"))
+    ' "$STATUS_FILE")"
+
+    "$JQ" -n --arg text "$text" --arg class "$overall" --arg tooltip "$tooltip" \
+      '{text:$text,class:$class,tooltip:$tooltip}'
+  '';
+
+  menuScript = pkgs.writeShellScript "sentinel-menu.sh" ''
+    set -euo pipefail
+
+    SENTINEL="${lib.getExe cfg.package}"
+    LAUNCHER='${cfg.waybar.launcherCmd}'
+    PAGER="${pkgs.less}/bin/less"
+
+    choice="$(printf "Status\nCheck\nDiff\nBackends\n" | eval "$LAUNCHER" || true)"
+
+    case "$choice" in
+      Status) "$SENTINEL" status ;;
+      Check)  "$SENTINEL" check ;;
+      Diff)   "$SENTINEL" diff | ''${PAGER} ;;
+      Backends) "$SENTINEL" backend detect | ''${PAGER} ;;
+      *) exit 0 ;;
+    esac
+  '';
+
+  waybarSnippet = pkgs.writeText "waybar.jsonc" ''
+    // Sentinel (installed by NixOS module)
+    // Scripts:
+    //   ${waybarDir}/sentinel-waybar.sh
+    //   ${waybarDir}/sentinel-menu.sh
+    //
+    // Add this block into your Waybar config:
+    {
+      "custom/sentinel": {
+        "exec": "${waybarDir}/sentinel-waybar.sh ${cfg.statusPath}",
+        "return-type": "json",
+        "interval": 5,
+        "on-click": "${waybarDir}/sentinel-menu.sh"
+      }
+    }
+  '';
 in
 {
   options.services.sentinel = {
@@ -79,6 +143,26 @@ in
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [ cfg.package ];
+
+    # Install Waybar assets when enabled
+    environment.etc = lib.mkIf cfg.waybar.enable {
+      "sentinel/waybar/sentinel-waybar.sh" = {
+        source = waybarScript;
+        mode = "0755";
+      };
+      "sentinel/waybar/sentinel-menu.sh" = {
+        source = menuScript;
+        mode = "0755";
+      };
+      "sentinel/waybar/waybar.jsonc" = {
+        source = waybarSnippet;
+        mode = "0644";
+      };
+    };
+
+    environment.systemPackages = lib.mkIf cfg.waybar.enable (
+      [ pkgs.jq pkgs.fuzzel pkgs.less ] ++ [ cfg.package ]
+    );
 
     systemd.services.sentinel-check = {
       description = "Sentinel policy check (writes status JSON)";
